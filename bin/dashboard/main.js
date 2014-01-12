@@ -1,6 +1,8 @@
 // Requires
 var gui = require('nw.gui');
-var path = require('path');
+
+var pathresolve = require('path').resolve;
+var child_process = require('child_process');
 
 var Q = require('q');
 var _ = require('underscore');
@@ -113,6 +115,38 @@ var openWindow = function(url) {
     return win;
 };
 
+// Kind of hackish way to
+// Detect when a codebox instance is booted
+function waitForBoot(child) {
+    var d = Q.defer();
+    var booted = false;
+
+    // Check for successful boot
+    var onData = function(data) {
+        if(data.indexOf('Server is listening on') !== -1) {
+            booted = true;
+            return d.resolve();
+        }
+    };
+
+    // Check if it exited normally or failed during boot
+    var onError = function(err) {
+        if(!booted) {
+            return d.reject(err);
+        }
+    };
+
+    // Handle success
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+
+    // Handle failure
+    child.on('exit', onError);
+    child.on('error', onError);
+
+    return d.promise;
+}
+
 var runCodebox = function(path) {
     if (instances[path]) {
         openWindow(instances[path].url);
@@ -130,15 +164,27 @@ var runCodebox = function(path) {
         return [port, url];
     })
     .spread(function (port, url) {
-        return codebox.start({
-            'root': path,
-            'server': {
-                'port': port
-            },
-            'addons': {
-                'blacklist': ["cb.offline"]
-            }
-        })
+        // Fork using the current node process (node-webkit)
+        var child = child_process.execFile(
+            pathresolve(process.cwd(), 'bin/codebox.js'), [
+                'run'
+            ], {
+            'env': _.defaults({
+                // Workspace directory
+                WORKSPACE_DIR: path,
+
+                // Port to run the server on
+                PORT: port,
+
+                // We aren't interested in the offline module
+                // when the running on the desktop
+                WORKSPACE_ADDONS_BLACKLIST: ["cb.offline"]
+            }, process.env)
+        });
+
+        // Kind of hackish way to det
+
+        return waitForBoot(child)
         .then(function() {
             return url;
         });
